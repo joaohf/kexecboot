@@ -123,6 +123,9 @@ char *chcase(char ul, const char *src, char *dst);
 /* Return pointer to word in string 'str' and end of word in 'endptr' */
 char *get_word(char *str, char **endptr);
 
+/* Return pointer to line in string 'str' with end of line in 'endptr' */
+char *get_line(char *str, char **endptr);
+
 /* Return non-negative integer from string 'str' and end of number in 'endptr' */
 int get_nni(const char *str, char **endptr);
 
@@ -151,10 +154,24 @@ void setup_terminal(char *ttydev, int *echo_state, int mode);
  */
 int fexecw(const char *path, char *const argv[], char *const envp[]);
 
+/*
+ * Function: fexecwstr()
+ * (fork, execve, w and get child's stdout)
+ * Do the something of fexecw and copy child's stdout to strout buffer
+ */
+int fexecwstr(const char *path, char *const argv[], char *const envp[],
+		char *strout, int strout_len, const char *chroot_path);
+
 /* UBI attach MTD device to mtd_id */
 int ubi_attach(const char *mtd_id);
 
 /* Find UBI device attached to mtd_id */
 int find_attached_ubi_device(const char *mtd_id);
+
+/* Given a pointer to a string, returns an array of strings */
+char **buildargv (const char *input);
+
+/* Deallocate an array of strings */
+void freeargv (char **vector);
 
 #endif //_HAVE_UTIL_H_

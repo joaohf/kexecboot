@@ -46,6 +46,7 @@ struct boot_item_t {
 	char *kernelpath;	/* Found kernel (/boot/zImage) */
 	char *cmdline_append;	/* Appended kernel cmdline (logo.nologo debug) */
 	char *cmdline;		/* Kernel cmdline */
+	char *exec_cmdline; /* Kernel exec cmdline (logo.nologo debug) */
 	char *initrd;		/* Initial ramdisk file */
 	void *icondata;		/* Icon data */
 	int priority;		/* Priority of item in menu */

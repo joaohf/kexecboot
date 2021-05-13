@@ -61,6 +61,7 @@ kx_cfg_section *cfg_section_new(struct cfgdata_t *cfgdata)
 	sc->kernelpath = NULL;
 	sc->cmdline_append = NULL;
 	sc->cmdline = NULL;
+	sc->exec_cmdline = NULL;
 	sc->initrd = NULL;
 	sc->iconpath = NULL;
 	sc->icondata = NULL;
@@ -196,6 +197,18 @@ static int set_cmdline(struct cfgdata_t *cfgdata, char *value)
 
 	dispose(sc->cmdline);
 	sc->cmdline = strdup(value);
+	return 0;
+}
+
+static int set_exec_cmdline(struct cfgdata_t *cfgdata, char *value)
+{
+	kx_cfg_section *sc;
+
+	sc = cfgdata->current;
+	if (!sc) return -1;
+
+	dispose(sc->exec_cmdline);
+	sc->exec_cmdline = strdup(value);
 	return 0;
 }
 
@@ -366,7 +379,44 @@ static int set_ttydev(struct cfgdata_t *cfgdata, char *value)
 	return 0;
 }
 
-enum cfg_type_t { CFG_NONE, CFG_FILE, CFG_CMDLINE };
+static int set_dtb_from_exec_append(struct cfgdata_t *cfgdata, char *value)
+{
+	kx_cfg_section *sc;
+	char *p;
+	int len;
+
+	sc = cfgdata->current;
+	if (!sc) return -1;
+
+	len = strlenn(MOUNTPOINT) + strlenn(value);
+	p = malloc(len+1);
+	if (NULL == p) {
+		DPRINTF("Can't allocate memory to store dtb file name '/mnt/%s'", value);
+		return -1;
+	}
+
+	dispose(sc->dtbpath);
+	sc->dtbpath = p;
+	strcpy(sc->dtbpath, MOUNTPOINT);
+	strcat(sc->dtbpath, value);
+
+	return 0;
+}
+
+static int set_exec_append(struct cfgdata_t *cfgdata, char *value)
+{
+	kx_cfg_section *sc;
+
+	sc = cfgdata->current;
+	if (!sc) return -1;
+
+	dispose(sc->cmdline_append);
+	sc->cmdline_append = strdup(value);
+
+	return 0;
+}
+
+enum cfg_type_t { CFG_NONE, CFG_FILE, CFG_CMDLINE, CFG_CMDEXECAPPEND };
 
 /* Config file (keywords -> parsing functions) tuples array */
 struct cfg_keyfunc_t {
@@ -389,12 +439,14 @@ static struct cfg_keyfunc_t cfg_keyfunc[] = {
 	{ CFG_FILE, 1, "ICON", set_icon },
 	{ CFG_FILE, 1, "APPEND", set_cmdline_append },
 	{ CFG_FILE, 1, "CMDLINE", set_cmdline },
+	{ CFG_FILE, 1, "EXEC_APPEND", set_exec_cmdline },
 	{ CFG_FILE, 1, "INITRD", set_initrd },
 	{ CFG_FILE, 1, "PRIORITY", set_priority },
 	{ CFG_CMDLINE, 1, "FBCON", set_fbcon },
 	{ CFG_CMDLINE, 1, "MTDPARTS", set_mtdparts },
 	{ CFG_CMDLINE, 1, "CONSOLE", set_ttydev },
-
+	{ CFG_CMDEXECAPPEND, -1, "DTB", set_dtb_from_exec_append },
+	{ CFG_CMDEXECAPPEND, -1, "APPEND", set_exec_append },
 	{ CFG_NONE, 0, NULL, NULL }
 };
 
@@ -524,6 +576,42 @@ int parse_cmdline(struct cfgdata_t *cfgdata)
 		/* Process keyword and value */
 		process_keyword(CFG_CMDLINE, cfgdata, keyword, value);
 	}
+
+	return 0;
+}
+
+int parse_exec_cmdline(struct cfgdata_t *cfgdata, const char *stdout_str)
+{
+	char *p;
+	char *c;
+	char *keyword;
+	char *value;
+
+	p = strdup(stdout_str);
+	c = p;
+	/* Split string to words */
+	while ( NULL != (keyword = get_word(c, &c)) ) {
+		if ( ('\0' == keyword[0]) || ('#' == keyword[0]) ) {
+			/* Skip comment or empty line */
+			continue;
+		}
+
+		*c = '\0';  /* NULL-terminate keyword-value pair */
+		++c;
+
+		/* Try to split line up to key and value */
+		value = strchr(keyword, '=');
+		if (NULL != value) {    /* '=' was found. We have value */
+			/* Split string to keyword and value */
+			*value = '\0';
+			++value;
+		}
+
+		/* Process keyword and value */
+		process_keyword(CFG_CMDEXECAPPEND, cfgdata, keyword, value);
+	}
+
+	dispose(p);
 
 	return 0;
 }

@@ -137,6 +137,7 @@ int addto_bootcfg(struct bootconf_t *bc, struct device_t *dev,
 		bi->kernelpath = sc->kernelpath;
 		bi->cmdline_append = sc->cmdline_append;
 		bi->cmdline = sc->cmdline;
+		bi->exec_cmdline = sc->exec_cmdline;
 		bi->initrd = sc->initrd;
 		bi->icondata = sc->icondata;
 		bi->priority = sc->priority;
@@ -178,6 +179,7 @@ void free_bootcfg(struct bootconf_t *bc)
 		free(bc->list[i]->device);
 		free(bc->list[i]->kernelpath);
 		dispose(bc->list[i]->cmdline);
+		dispose(bc->list[i]->exec_cmdline);
 		dispose(bc->list[i]->initrd);
 		dispose(bc->list[i]->label);
 		free(bc->list[i]);

@@ -200,6 +200,105 @@ static int check_for_ubi(struct boot_item_t *item,
 	}
 }
 
+void pre_start_kernel(struct params_t *params, int choice)
+{
+	const char mount_point[] = MOUNTPOINT;
+	const char mount_point_dev[] = MOUNTPOINT "/dev";
+	const char *exec_cmdline_path = NULL;
+	char **load_argv;
+	char stdout_str[COMMAND_LINE_SIZE] = {0};
+	int stdout_str_len = sizeof(stdout_str);
+	char exec_str[COMMAND_LINE_SIZE] = {0};
+
+	char mount_dev[16];
+	char mount_fstype[16];
+
+	struct cfgdata_t cfgdata;
+
+	/* empty environment */
+	char *const _envp[] = { NULL };
+	char *const envp[] = { NULL };
+
+	struct boot_item_t *item;
+	int n;
+	char *p;
+
+	item = params->bootcfg->list[choice];
+
+	if (item->exec_cmdline) {
+		if (item->device) {
+			/* default device to mount */
+			strcpy(mount_dev, item->device);
+
+			if (item->fstype) {
+				/* default fstype to mount */
+				strcpy(mount_fstype, item->fstype);
+			}
+		}
+
+		/* Mount boot device */
+		if ( -1 == mount(mount_dev, mount_point, mount_fstype,
+				MS_RDONLY, NULL) ) {
+			perror("Can't mount boot device");
+			exit(-1);
+		}
+
+		strcpy(mount_dev, "/dev");
+
+		/* Bind /dev to MOUNTPOINT/dev */
+		if ( -1 == mount(mount_dev, mount_point_dev, mount_fstype,
+				MS_BIND, NULL) ) {
+			perror("Can't mount boot device");
+			exit(-1);
+		}
+
+		strcpy(exec_str, item->exec_cmdline);
+
+		load_argv = buildargv(exec_str);
+		exec_cmdline_path = load_argv[0];
+
+		log_msg(lg, "Executing Append Kernel cmdline: %s", exec_cmdline_path);
+
+		n = fexecwstr(exec_cmdline_path, (char *const *)load_argv,
+			envp, stdout_str, stdout_str_len,
+			MOUNTPOINT);
+		if (-1 == n) {
+			perror("exec_cmdline can't load");
+			exit(-1);
+		}
+
+		init_cfgdata(&cfgdata);
+
+		cfg_section_new(&cfgdata);
+
+		/* Parse stdout_str and update item */
+		parse_exec_cmdline(&cfgdata, stdout_str);
+
+		/* Update item */
+		if (cfgdata.current->dtbpath) {
+			item->dtbpath = cfgdata.current->dtbpath;
+		}
+		if (cfgdata.current->cmdline_append) {
+			p = malloc(strlen(item->cmdline_append) + strlen(cfgdata.current->cmdline_append) + 1);
+			if (NULL == p)
+				perror("Can't allocate memory to store cmdline_append");
+
+			strcpy(p, item->cmdline_append);
+			strcat(p, " ");
+			strcat(p, cfgdata.current->cmdline_append);
+
+			dispose(item->cmdline_append);
+			item->cmdline_append = p;
+		}
+
+		destroy_cfgdata(&cfgdata);
+
+		umount(mount_point_dev);
+		umount(mount_point);
+
+		freeargv(load_argv);
+	}
+}
 
 void start_kernel(struct params_t *params, int choice)
 {
@@ -310,7 +409,6 @@ void start_kernel(struct params_t *params, int choice)
 		/* default fstype to mount */
 		strcpy(mount_fstype, item->fstype);
 
-		/* Overwrite if CMDLINE is configured, append if APPEND is configured */
 		if (item->cmdline) {
 			add_cmd_option(load_argv, str_cmdline_start, item->cmdline, &idx);
 		} else {
@@ -546,24 +644,24 @@ kx_menu *build_menu(struct params_t *params)
 	kx_menu *menu;
 	kx_menu_level *ml;
 	kx_menu_item *mi;
-	
+
 #ifdef USE_ICONS
 	kx_picture **icons;
-	
+
 	if (params->gui) icons = params->gui->icons;
 	else icons = NULL;
 #endif
-	
+
 	/* Create menu with 2 levels (main and system) */
 	menu = menu_create(2);
 	if (!menu) {
 		DPRINTF("Can't create menu");
 		return NULL;
 	}
-	
+
 	/* Create main menu level */
 	menu->top = menu_level_create(menu, 4, NULL);
-	
+
 	/* Create system menu level */
 	ml = menu_level_create(menu, 6, menu->top);
 	if (!ml) {
@@ -806,7 +904,7 @@ int do_rescan(struct params_t *params)
 }
 
 
-/* Process menu context 
+/* Process menu context
  * Return 0 to select, <0 to raise error, >0 to continue
  */
 int process_ctx_menu(struct params_t *params, int action) {
@@ -1083,7 +1181,7 @@ int main(int argc, char **argv)
 	}
 #endif
 	if (no_ui) exit(-1); /* Exit if no one UI was initialized */
-	
+
 	params.menu = build_menu(&params);
 	params.bootcfg = NULL;
 	scan_devices(&params);
@@ -1125,6 +1223,7 @@ int main(int argc, char **argv)
 	menu_destroy(params.menu, 0);
 
 	if (rc >= A_DEVICES) {
+		pre_start_kernel(&params, rc - A_DEVICES);
 		start_kernel(&params, rc - A_DEVICES);
 	}
 

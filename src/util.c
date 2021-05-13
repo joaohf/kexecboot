@@ -124,7 +124,7 @@ void log_msg(kx_text *log, char *fmt, ...)
 	va_start(ap, fmt);
 	vsnprintf((char *)&buf, sizeof(buf), fmt, ap);
 	va_end(ap);
-	
+
 	/* Split strings by '\n' and add to charlist */
 	b = buf;
 	while (NULL != (e = strchr(b, '\n'))) {
@@ -194,6 +194,24 @@ char *get_word(char *str, char **endptr)
 	}
 }
 
+/* Return pointer to line in string 'str' with end of line in 'endptr' */
+char *get_line(char *str, char **endptr)
+{
+	char *p = str;
+	char *wstart;
+
+	if ('\0' != *p) {
+		wstart = p;
+
+		/* Search end of line */
+		while ( !isprint(*p) && ('\0' != *p) ) ++p;
+		if (NULL != endptr) *endptr = p;
+		return wstart;
+	} else {
+		if (NULL != endptr) *endptr = str;
+		return NULL;
+	}
+}
 
 /* Strip leading and trailing spaces, tabs and newlines
  * NOTE: this will modify str */
@@ -387,6 +405,126 @@ int fexecw(const char *path, char *const argv[], char *const envp[])
 	return status;
 }
 
+int fexecwstr(const char *path, char *const argv[], char *const envp[], char *strout, int strout_len, const char *chroot_path)
+{
+	int stdin_pipe[2];
+	int stdout_pipe[2];
+	pid_t pid;
+	struct sigaction ignore, old_int, old_quit;
+	sigset_t masked, oldmask;
+	int status;
+	int retval;
+
+#define PIPE_READ 0
+#define PIPE_WRITE 1
+
+	/* Block SIGCHLD and ignore SIGINT and SIGQUIT */
+	/* Do this before the fork() to avoid races */
+
+	ignore.sa_handler = SIG_IGN;
+	sigemptyset(&ignore.sa_mask);
+	ignore.sa_flags = 0;
+	sigaction(SIGINT, &ignore, &old_int);
+	sigaction(SIGQUIT, &ignore, &old_quit);
+
+	sigemptyset(&masked);
+	sigaddset(&masked, SIGCHLD);
+	sigprocmask(SIG_BLOCK, &masked, &oldmask);
+
+	if (pipe(stdin_pipe) < 0) {
+		perror("allocating pipe for child input redirect");
+		return -1;
+	}
+	if (pipe(stdout_pipe) < 0) {
+		close(stdin_pipe[PIPE_READ]);
+		close(stdin_pipe[PIPE_WRITE]);
+		perror("allocating pipe for child output redirect");
+		return -1;
+	}
+
+	pid = fork();
+
+	if (pid < 0) {
+		close(stdin_pipe[PIPE_READ]);
+		close(stdin_pipe[PIPE_WRITE]);
+		close(stdout_pipe[PIPE_READ]);
+		close(stdout_pipe[PIPE_WRITE]);
+
+		/* can't fork */
+		return -1;
+	} else if (pid == 0) {
+		/* it is child */
+		sigaction(SIGINT, &old_int, NULL);
+		sigaction(SIGQUIT, &old_quit, NULL);
+		sigprocmask(SIG_SETMASK, &oldmask, NULL);
+
+		retval = dup2(stdin_pipe[PIPE_READ], STDIN_FILENO);
+		if (retval == -1) {
+			perror("redirecting stdin");
+			return -1;
+		}
+		retval = dup2(stdout_pipe[PIPE_WRITE], STDOUT_FILENO);
+		if (retval == -1) {
+			perror("redirecting stdout");
+			return -1;
+		}
+		retval = dup2(stdout_pipe[PIPE_WRITE], STDERR_FILENO);
+		if (retval == -1) {
+			perror("redirecting stderr");
+			return -1;
+		}
+
+		close(stdin_pipe[PIPE_READ]);
+		close(stdin_pipe[PIPE_WRITE]);
+		close(stdout_pipe[PIPE_READ]);
+		close(stdout_pipe[PIPE_WRITE]);
+
+		if (chroot_path) {
+			retval = chroot(chroot_path);
+			if (retval == -1) {
+				perror("chroot fail");
+				return -1;
+			}
+		}
+
+		retval = chdir("/");
+		if (retval == -1) {
+			perror("changing dir inside chroot fail");
+			return -1;
+		}
+
+		/* replace child with executed file */
+		execve(path, (char *const *)argv, (char *const *)envp);
+		/* should not happens but... */
+		_exit(127);
+	}
+
+	/* it is parent */
+
+	close(stdin_pipe[PIPE_READ]);
+	close(stdout_pipe[PIPE_WRITE]);
+
+	char nChar;
+	char *c = strout;
+
+	while (read(stdout_pipe[PIPE_READ], &nChar, 1) == 1) {
+		*(c++) = nChar;
+	}
+
+	/* wait for our child and store status */
+	waitpid(pid, &status, 0);
+
+	close(stdin_pipe[PIPE_WRITE]);
+	close(stdout_pipe[PIPE_READ]);
+
+	/* restore signal handlers */
+	sigaction(SIGINT, &old_int, NULL);
+	sigaction(SIGQUIT, &old_quit, NULL);
+	sigprocmask(SIG_SETMASK, &oldmask, NULL);
+
+	return status;
+}
+
 /*
  * wrapper around fexecw ubiattach
  * returns ubi_id attached to mtd_id
@@ -452,4 +590,108 @@ int find_attached_ubi_device(const char *mtd_id)
 		}
 	}
 	return res;
+}
+
+#define INITIAL_MAXARGC 8
+#define EOS '\0'
+
+static void
+consume_whitespace (const char **input)
+{
+	while (isspace (**input)) {
+		(*input)++;
+	}
+}
+
+char **buildargv (const char *input)
+{
+	char *arg;
+	char *copybuf;
+	int squote = 0;
+	int dquote = 0;
+	int bsquote = 0;
+	int argc = 0;
+	int maxargc = 0;
+	char **argv = NULL;
+	char **nargv;
+
+	if (input == NULL) {
+		return argv;
+	}
+
+	copybuf = (char *) malloc (strlen (input) + 1);
+
+	do {
+		consume_whitespace (&input);
+
+		if ((maxargc == 0) || (argc >= (maxargc - 1))) {
+			/* argv needs initialization, or expansion */
+			if (argv == NULL) {
+			maxargc = INITIAL_MAXARGC;
+			nargv = (char **) malloc (maxargc * sizeof (char *));
+		} else {
+			maxargc *= 2;
+			nargv = (char **) realloc (argv, maxargc * sizeof (char *));
+		}
+			argv = nargv;
+			argv[argc] = NULL;
+		}
+		/* Begin scanning arg */
+		arg = copybuf;
+		while (*input != EOS) {
+			if (isspace (*input) && !squote && !dquote && !bsquote) {
+				break;
+			} else {
+				if (bsquote) {
+					bsquote = 0;
+					*arg++ = *input;
+				} else if (*input == '\\') {
+					bsquote = 1;
+				} else if (squote) {
+					if (*input == '\'') {
+						squote = 0;
+					} else {
+						*arg++ = *input;
+					}
+				} else if (dquote) {
+					if (*input == '"') {
+						dquote = 0;
+					} else {
+						*arg++ = *input;
+					}
+				} else {
+					if (*input == '\'') {
+						squote = 1;
+					} else if (*input == '"') {
+						dquote = 1;
+					} else {
+						*arg++ = *input;
+					}
+				}
+				input++;
+			}
+		}
+		*arg = EOS;
+		argv[argc] = strdup(copybuf);
+		argc++;
+		argv[argc] = NULL;
+
+		consume_whitespace (&input);
+	} while (*input != EOS);
+
+	free (copybuf);
+
+	return argv;
+}
+
+void freeargv (char **vector)
+{
+	register char **scan;
+
+	if (vector != NULL) {
+		for (scan = vector; *scan != NULL; scan++) {
+			free (*scan);
+		}
+		free (vector);
+	}
 }

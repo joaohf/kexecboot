@@ -33,6 +33,7 @@ typedef struct {
 	char *kernelpath;	/* Found kernel (/boot/zImage) */
 	char *cmdline_append;	/* Appended kernel cmdline (logo.nologo debug) */
 	char *cmdline;		/* Kernel cmdline */
+	char *exec_cmdline;	/* Kernel exec cmdline */
 	char *initrd;		/* Initial ramdisk file */
 	char *iconpath;		/* Custom partition icon path */
 	void *icondata;		/* Icon data */
@@ -64,6 +65,9 @@ void init_cfgdata(struct cfgdata_t *cfgdata);
 /* Free config file sections */
 void destroy_cfgdata(struct cfgdata_t *cfgdata);
 
+/* Create a new config section */
+kx_cfg_section *cfg_section_new(struct cfgdata_t *cfgdata);
+
 /* Set kernelpath only (may be used when no config file found) */
 int cfgdata_add_kernel(struct cfgdata_t *cfgdata, char *kernelpath);
 
@@ -72,5 +76,7 @@ int cfgdata_add_kernel(struct cfgdata_t *cfgdata, char *kernelpath);
 int parse_cfgfile(char *cfgpath, struct cfgdata_t *cfgdata);
 
 int parse_cmdline(struct cfgdata_t *cfgdata);
+
+int parse_exec_cmdline(struct cfgdata_t *cfgdata, const char *stdout_str);
 
 #endif /* _HAVE_CONFIGPARSER_H */
